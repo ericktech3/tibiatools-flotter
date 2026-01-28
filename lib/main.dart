@@ -9,7 +9,7 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Foreground service (monitor)
-  await ForegroundTaskManager.init();
+  ForegroundTaskManager.init();
 
   // Local notifications
   await NotificationService.init();
