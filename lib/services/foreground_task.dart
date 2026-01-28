@@ -9,36 +9,41 @@ import 'monitor_service.dart';
 /// Callback (top-level) chamado quando o serviço inicia.
 ///
 /// Importante: precisa ser top-level e ter @pragma('vm:entry-point')
-/// conforme documentação/exemplo do plugin.
+/// conforme documentação do plugin.
 @pragma('vm:entry-point')
 void startCallback() {
   FlutterForegroundTask.setTaskHandler(MonitorTaskHandler());
 }
 
 class ForegroundTaskManager {
-  static Future<void> init() async {
+  static const int _defaultIntervalMs = 60000; // 60s
+  static const int _serviceId = 1001;
+
+  static void init() {
     // Deve ser chamado no main() antes do runApp()
     FlutterForegroundTask.initCommunicationPort();
 
-    await FlutterForegroundTask.init(
+    FlutterForegroundTask.init(
       androidNotificationOptions: AndroidNotificationOptions(
         channelId: 'tibia_tools_monitor',
         channelName: 'Tibia Tools Monitor',
         channelDescription: 'Monitora favoritos em background (foreground service).',
         channelImportance: NotificationChannelImportance.LOW,
         priority: NotificationPriority.LOW,
-        iconData: const NotificationIconData(
-          resType: ResourceType.mipmap,
-          resPrefix: ResourcePrefix.ic,
-          name: 'launcher',
-        ),
       ),
-      foregroundTaskOptions: const ForegroundTaskOptions(
-        interval: 60000, // 60s (será sobrescrito ao iniciar)
-        isOnceEvent: false,
+      iosNotificationOptions: const IOSNotificationOptions(
+        showNotification: true,
+        playSound: false,
+      ),
+      // No v9+, o intervalo fica dentro de eventAction (ForegroundTaskEventAction.repeat)
+      foregroundTaskOptions: ForegroundTaskOptions(
+        eventAction: ForegroundTaskEventAction.repeat(_defaultIntervalMs),
         autoRunOnBoot: false,
+        autoRunOnMyPackageReplaced: false,
         allowWifiLock: true,
         allowWakeLock: true,
+        allowAutoRestart: true,
+        stopWithTask: false,
       ),
     );
   }
@@ -51,31 +56,44 @@ class ForegroundTaskManager {
     await start();
   }
 
+  static ForegroundTaskOptions _buildOptions(int intervalMs) {
+    return ForegroundTaskOptions(
+      eventAction: ForegroundTaskEventAction.repeat(intervalMs),
+      autoRunOnBoot: false,
+      autoRunOnMyPackageReplaced: false,
+      allowWifiLock: true,
+      allowWakeLock: true,
+      allowAutoRestart: true,
+      stopWithTask: false,
+    );
+  }
+
   static Future<void> start() async {
     final intervalSec = await FavoritesStore.getMonitorIntervalSec();
     final intervalMs = intervalSec * 1000;
 
+    final options = _buildOptions(intervalMs);
+
     if (await FlutterForegroundTask.isRunningService) {
+      // Atualiza o intervalo/params em runtime
       await FlutterForegroundTask.updateService(
+        foregroundTaskOptions: options,
         notificationTitle: 'Tibia Tools: monitorando favoritos',
         notificationText: 'Intervalo: ${intervalSec}s',
       );
       return;
     }
 
+    // Define as opções que serão usadas pelo serviço no startService.
+    FlutterForegroundTask.foregroundTaskOptions = options;
+
     await FlutterForegroundTask.startService(
+      serviceId: _serviceId,
+      // Android 14+: declarar o tipo do foreground service (dataSync faz sentido aqui)
+      serviceTypes: const [ForegroundServiceTypes.dataSync],
       notificationTitle: 'Tibia Tools: monitorando favoritos',
       notificationText: 'Intervalo: ${intervalSec}s',
       callback: startCallback,
-      // Intervalo efetivo depende do plugin e do SO; este é o solicitado.
-      // Algumas ROMs podem otimizar/agrupar.
-      foregroundTaskOptions: ForegroundTaskOptions(
-        interval: intervalMs,
-        isOnceEvent: false,
-        autoRunOnBoot: false,
-        allowWifiLock: true,
-        allowWakeLock: true,
-      ),
     );
   }
 
@@ -87,7 +105,6 @@ class ForegroundTaskManager {
 }
 
 class MonitorTaskHandler extends TaskHandler {
-  Timer? _timer;
   bool _running = false;
 
   @override
@@ -97,9 +114,9 @@ class MonitorTaskHandler extends TaskHandler {
   }
 
   @override
-  Future<void> onRepeatEvent(DateTime timestamp) async {
-    // Chamado no intervalo configurado no serviço
-    await _safeRun();
+  void onRepeatEvent(DateTime timestamp) {
+    // Chamado de acordo com eventAction em ForegroundTaskOptions
+    unawaited(_safeRun());
   }
 
   Future<void> _safeRun() async {
@@ -115,9 +132,8 @@ class MonitorTaskHandler extends TaskHandler {
   }
 
   @override
-  Future<void> onDestroy(DateTime timestamp) async {
-    _timer?.cancel();
-    _timer = null;
+  Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
+    // nada
   }
 
   @override
@@ -127,7 +143,10 @@ class MonitorTaskHandler extends TaskHandler {
   }
 
   @override
-  void onButtonPressed(String id) {}
+  void onNotificationButtonPressed(String id) {}
+
+  @override
+  void onNotificationDismissed() {}
 
   @override
   void onReceiveData(Object data) {
