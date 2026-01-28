@@ -1,31 +1,54 @@
-name: Android (Flutter)
+name: Android (Flutter) Build
 
 on:
-  workflow_dispatch:
   push:
     branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: subosito/flutter-action@v2
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
 
+      - name: Create clean Flutter app skeleton
+        run: |
+          rm -rf __build_app
+          flutter create -t app __build_app
+
+      - name: Copy app sources into skeleton
+        run: |
+          rsync -a --delete lib/ __build_app/lib/
+          rsync -a --delete assets/ __build_app/assets/
+          cp pubspec.yaml __build_app/pubspec.yaml
+          if [ -f analysis_options.yaml ]; then cp analysis_options.yaml __build_app/analysis_options.yaml; fi
+
       - name: Install deps
+        working-directory: __build_app
         run: flutter pub get
 
+      - name: Patch Android Manifest for notifications/foreground service
+        run: python3 ci/patch_android.py __build_app
+
       - name: Build APK (release)
+        working-directory: __build_app
         run: flutter build apk --release
 
-      - name: Upload artifact
+      - name: Build AAB (release)
+        working-directory: __build_app
+        run: flutter build appbundle --release
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: app-release-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: android-release
+          path: |
+            __build_app/build/app/outputs/flutter-apk/app-release.apk
+            __build_app/build/app/outputs/bundle/release/app-release.aab
