@@ -1,0 +1,62 @@
+name: Android (Flutter clean build)
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+          cache: true
+
+      - name: Create clean Flutter project
+        run: |
+          flutter --version
+          flutter create --platforms=android --org com.ericktech3 tibia_tools_app
+
+          # Copy source pack into the generated app
+          rm -rf tibia_tools_app/lib tibia_tools_app/assets
+          cp -R lib tibia_tools_app/lib
+          if [ -d "assets" ]; then cp -R assets tibia_tools_app/assets; fi
+          cp pubspec.yaml tibia_tools_app/pubspec.yaml
+          if [ -f "analysis_options.yaml" ]; then cp analysis_options.yaml tibia_tools_app/analysis_options.yaml; fi
+
+      - name: Patch Android (manifest + desugaring)
+        run: |
+          python3 ci/patch_android.py tibia_tools_app
+
+      - name: Pub get
+        working-directory: tibia_tools_app
+        run: flutter pub get
+
+      - name: Build APK (release)
+        working-directory: tibia_tools_app
+        run: flutter build apk --release
+
+      - name: Build AAB (release)
+        working-directory: tibia_tools_app
+        run: flutter build appbundle --release
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build
+          path: |
+            tibia_tools_app/build/app/outputs/flutter-apk/app-release.apk
+            tibia_tools_app/build/app/outputs/bundle/release/app-release.aab
